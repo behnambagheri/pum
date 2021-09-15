@@ -6,6 +6,17 @@ VERSION=1.0.0
 unsanitized_client=$2
 TELNET_SLEEP_TIME=1
 EASYRSA_CERT_EXPIRE=7
+PKG="git vim rsync wget bash-completion epel-release firewalld nginx"
+PKG_AFTER_UPDATE="yum-utils bash-completion-extras htop telnet redis openvpn"
+DOCKER_PKG="docker-ce docker-ce-cli containerd.io"
+USERNAME="it"
+HOSTNAME="node01.primevpn.tk"
+GIT_USER="justice"
+GIT_PASS="%CC^D)fb6277"
+GIT_DIRECT_CREDENTIAL="https://justice:%25CC%5eD%29fb6277@git.primevpn.tk"
+PROJECT_PATH="$HOME/project"
+PROJECT_NAME="pum"
+BRANCH_NAME="production"
 
 usage(){
 
@@ -389,6 +400,201 @@ client_peer_id(){
 	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f12
 }
 
+UPDATE() {
+    local YUM_UPDATE
+	YUM_UPDATE="$($1 2> err.txt)"
+	if [ "$YUM_UPDATE" ]; then
+		echo -e "System successfully updated.\n"
+	else
+		echo -e "System not successfully updated, find error log in /root/err.txt\n"
+	fi
+}
+
+INSTALL_PKG(){
+
+if [ -n "$1" ]; then
+    local PKG
+    PKG="$1"
+fi
+    for p in $PKG
+    do
+        echo -e "Installing $p package..."
+        local IS_PKG_INSTALLED
+    	IS_PKG_INSTALLED=$(yum list installed | grep "$p")
+    	if [ "$IS_PKG_INSTALLED" ]; then
+    	    echo -e "$p was Installed before.\n"
+    	else
+    	    local IS_PACKAGE_INSTALLED_SUCCESSFULLY
+    		IS_PACKAGE_INSTALLED_SUCCESSFULLY=$(yum install -y "$p" 1>> out.txt 2>> err.txt)
+    		if [ "$IS_PACKAGE_INSTALLED_SUCCESSFULLY" ]; then
+    			echo -e "$p successfully installed\n"
+    		else
+    			echo -e "$p does not successfully installed.\n"
+    		fi
+    	fi
+    done
+
+}
+
+OPEN_FIREWALL(){
+    local FIREWALLD_STATUS
+    FIREWALLD_STATUS="$(systemctl status firewalld.service)"
+    if [ "$FIREWALLD_STATUS" ]; then
+        case $1 in
+        --port)
+            firewall-cmd --permanent --zone=public --add-port="$2"/"$3"
+            firewall-cmd --reload
+            ;;
+        --service)
+            fierwall-cmd --permanent --zone-public --add-service="$2"
+            firewall-cmd --reload
+            ;;
+        --rich-rule)
+            firewall-cmd --permanent --zone=public --add-rich-rule="rule family=ipv4 \
+            source address='$2'\
+            destination address='$3' \
+            port port='$4' protocol='$5' accept"
+            firewall-cmd --reload
+            ;;
+        esac
+    fi
+}
+
+set_hostname(){
+    hostnamectl set-hostname "$1"
+}
+
+git_credential(){
+#$1 add or remove
+#$2 local or global
+#$3 git username
+#$4 git password
+#$5 path of git direct credential
+#$6 path of project
+#$7 project name
+	case $1 in
+	--add|-a)
+	  	if [ "$2" == "local" ]; then
+			git config user.name "$3"
+			git config user.password "$4"
+			local IS_GIT_DIRECT_CREDENTIALS_EXIST
+			IS_GIT_DIRECT_CREDENTIALS_EXIST=$(grep "$5" "$HOME"/.git-credentials)
+			if [ -f "$HOME"/.git-credentials ] && [ "$IS_GIT_DIRECT_CREDENTIALS_EXIST" ]; then
+				echo -e "git-credentials is exist on $HOME/.git-credentials"
+			else
+				echo -e "$GIT_DIRECT_CREDENTIAL" >> "$HOME"/.git-credentials
+			fi
+		elif [ "$2" == "global" ]; then
+			git config --global user.name "$3"
+			git config --global user.password "$4"
+			local IS_GIT_DIRECT_CREDENTIALS_EXIST
+			IS_GIT_DIRECT_CREDENTIALS_EXIST=$(grep "$5" "$HOME"/.git-credentials)
+			if [ -f "$HOME"/.git-credentials ] && [ "$IS_GIT_DIRECT_CREDENTIALS_EXIST" ]; then
+				echo -e "git-credentials is exist on $HOME/.git-credentials"
+			else
+				echo -e "$5" >> "$HOME"/.git-credentials
+			fi
+		fi
+	  ;;
+	--remove|-rm)
+		if [ "$2" == "local" ]; then
+			sed -i '/user/d' "$6"/"$7"/.git/config &> /dev/null
+			sed -i "/$3/d" "$6"/"$7"/.git/config &> /dev/null
+			sed -i "/$4/d" "$6"/"$7"/.git/config &> /dev/null
+			sed -i "/$5/d" "$HOME/.git-credentials" &> /dev/null
+		elif [ "$2" == "global" ]; then
+			sed -i "/$GIT_USER/d" "$HOME/.git-credentials" &> /dev/null
+			sed -i "/$GIT_PASS/d" "$HOME/.git-credentials" &> /dev/null
+			sed -i "/$5/d" "$HOME/.git-credentials" &> /dev/null
+		fi
+	  ;;
+	esac
+}
+
+git_pull(){
+    local PROJECT_PATH
+    PROJECT_PATH="$1"
+    local PROJECT_NAME
+    PROJECT_NAME="$2"
+    local BRANCH_NAME
+    BRANCH_NAME="$3"
+
+    if ! [ -d "$PROJECT_PATH" ]; then
+        mkdir "$PROJECT_PATH"
+    fi
+    if [ -d "$PROJECT_PATH" ]; then
+        if [ -d "$PROJECT_PATH/$PROJECT_NAME" ]; then
+            cd "$PROJECT_PATH/$PROJECT_NAME" || exit
+		    local IS_CORRECT_BRANCH
+		    IS_CORRECT_BRANCH=$(git branch -a | grep "$BRANCH_NAME" | grep -F '*')
+		    if [ "$IS_CORRECT_BRANCH" ]; then
+		        git pull origin "$BRANCH_NAME"
+		    else
+		        git checkout origin/"$BRANCH_NAME"
+		        git pull origin "$BRANCH_NAME"
+		    fi
+		else
+		    mkdir -p "$PROJECT_PATH/$PROJECT_NAME"
+            cd "$PROJECT_PATH/$PROJECT_NAME" || exit
+		    local IS_CORRECT_BRANCH
+		    IS_CORRECT_BRANCH=$(git branch -a | grep "$BRANCH_NAME" | grep -F '*')
+		    if [ "$IS_CORRECT_BRANCH" ]; then
+		        git pull origin "$BRANCH_NAME"
+		    else
+		        git checkout origin/"$BRANCH_NAME"
+		        git pull origin "$BRANCH_NAME"
+		    fi
+        fi
+    fi
+}
+
+install_project(){
+    local PROJECT_PATH
+    PROJECT_PATH="$1"
+    local PROJECT_NAME
+    PROJECT_NAME="$2"
+    cd "$PROJECT_PATH/$PROJECT_NAME" || exit
+    cp "$PROJECT_NAME" /usr/local/bin/"$PROJECT_NAME"
+    ln -s "$PROJECT_PATH"/"$PROJECT_NAME"/"$PROJECT_NAME" /bin/"$PROJECT_NAME"
+    chmod +x /usr/local/bin/"$PROJECT_NAME"
+}
+create_systemd_unit(){
+    local PROJECT_NAME
+    PROJECT_NAME="$1"
+    local IS_UNIT_EXIST
+    IS_UNIT_EXIST="$(systemctl cat "$PROJECT_NAME".service)"
+    if ! [ "$IS_UNIT_EXIST" ]; then
+        echo -e "
+            [Unit]
+            Description=$PROJECT_NAME systemd service unit file.
+
+            [Service]
+            ExecStart=/bin/bash $PROJECT_NAME
+
+            [Install]
+            WantedBy=multi-user.target " > /etc/systemd/system/"$PROJECT_NAME".service
+        systemctl daemon-reload
+        systemctl enable --now "$PROJECT_NAME".service
+    else
+        local IS_UNIT_ACTIVE
+        IS_UNIT_ACTIVE="$(systemctl status "$PROJECT_NAME".service)"
+        if ! [ "$IS_UNIT_ACTIVE" ]; then
+            systemctl enable --now "$PROJECT_NAME".service
+            IS_UNIT_ACTIVE="$(systemctl status "$PROJECT_NAME".service)"
+            if ! [ "$IS_UNIT_ACTIVE" ]; then
+                echo -e "there was a problem with $PROJECT_NAME service."
+            fi
+        else
+            echo -e "$PROJECT_NAME is active"
+        fi
+    fi
+
+}
+
+run-command(){
+    /bin/bash "$@"
+}
+
 case $1 in
 	-n|--new)
 		client_name
@@ -465,6 +671,36 @@ case $1 in
 	-npp|--realtime-netpp)
 		netpp "$2"
 		;;
+    --update-os)
+        UPDATE "yum update -y"
+        ;;
+    --install-packages)
+        INSTALL_PKG "$2"
+        ;;
+    --open-firewall)
+        OPEN_FIREWALL "$2" "$3" "$4" "$5" "$6"
+        ;;
+    --set-hostname)
+        set_hostname "$2"
+        ;;
+    --set-git-cred)
+        git_credential --add "$2" "$GIT_USER" "$GIT_PASS" "$GIT_DIRECT_CREDENTIAL"
+        ;;
+    --remove-git-cred)
+        git_credential --remove "$2" "$GIT_USER" "$GIT_PASS" "$GIT_DIRECT_CREDENTIAL" "$PROJECT_PATH" "$PROJECT_NAME"
+        ;;
+    --git-pull)
+        git_pull "$2" "$3" "$4"
+        ;;
+    --install-script)
+        install_project "$2" "$3"
+        ;;
+    --create-systemd-unit)
+        create_systemd_unit "$2"
+        ;;
+    --run-command)
+        run-command "$@"
+        ;;
 	-v|--version)
 		echo -e "Version: $VERSION"
 		;;
