@@ -1,0 +1,480 @@
+#!/bin/bash
+
+#echo -e "Prime user management-( PUM :) )\n"
+#Variables:
+VERSION=1.0.0
+unsanitized_client=$2
+TELNET_SLEEP_TIME=1
+EASYRSA_CERT_EXPIRE=7
+
+usage(){
+
+############################################################
+# Help                                                     #
+############################################################
+
+   # Display Help
+	echo -e "pum(1)\n"
+	echo -e "NAME"
+	echo -e "	pum - Prime User Management\n"
+	echo -e "Syntax: pum [-n|r|l|c|d|cd|rip|vip|br|bs|t|tt|ct|id|pid|i|ns|rtx|npp]\n"
+	echo -e "SYNOPSIS"SYNOPSIS
+	echo -e "	Short:"
+	echo -e "		pum [OPTION...] CLIENT\n"
+	echo -e "\n DESCRIPTION"
+	echo -e "\n pum user management is a tool for doing all clients :*)"
+	echo -e "\n OPTION SUMMARY"
+	echo -e "		--new, -n                               Create new client"
+	echo -e "		--revoke, -r                            Revoke client"
+	echo -e "		--list, -l                              List all created clients"
+	echo -e "		--list-connected, -lc, -c               List all connected clients"
+	echo -e "		--disconnect, --dc, -d                  disconnect specific client"
+	echo -e "		--client-details, -cd                   show all details about specific client."
+	echo -e "		--client-real-address, -rip             show client real address"
+	echo -e "		--client-virtual-address, -vip          show client virtual address"
+	echo -e "		--client-bytes-received, -br            show client bytes RECEIVED TO with hr metrics"
+	echo -e "		--client-bytes-send, -bs                show client bytes TRANSMIT FROM with hr metrics"
+	echo -e "		--client-connected-since, -t            show pretty connected client time since"
+	echo -e "		--client-connected-since-t, -tt         show unit-time of client connected time since"
+	echo -e "		--client-connected-time, -ct            show pretty time of client connected to the server"
+	echo -e "		--client-id, -id                        show client id"
+	echo -e "		--client-peer-id, -pid                  show client peer id"
+	echo -e "		--real-time-netspeed, -i                show realtime I/O traffic per second"
+	echo -e "		--net-speed, -ns                        show I/O traffic per second"
+	echo -e "		-rtx                                    show number of I/O traffic"
+	echo -e "		--realtime-netpp, -npp                  show packets transfer realtime"
+	echo -e "		--version, -v                           show Version of script"
+	echo -e "		--help, -h                              Show help"
+	echo
+
+############################################################
+############################################################
+
+
+
+}
+
+
+client_name(){
+	if [ -z "$unsanitized_client" ]; then
+		echo -e "client name not set."
+		exit 2
+	elif [[ "$unsanitized_client" =~ ^[0-9]{1,3}$ ]]; then
+#		echo -e "client name sounds good."
+		client=$unsanitized_client
+	elif ! [[ "$unsanitized_client" =~ ^[0-9]{1,3}$ ]]; then
+		echo -e "client name not match regex."
+		exit 3
+	else
+		echo -e "I dont think before about it!"
+		exit 4
+	fi
+}
+new_client () {
+
+	if [ -e /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt ]; then
+	 	echo -e "client exist."
+	 	exit 5
+	else
+		# Generates the custom client.ovpn
+		cd /etc/openvpn/server/easy-rsa/ || exit
+		EASYRSA_CERT_EXPIRE=$EASYRSA_CERT_EXPIRE ./easyrsa build-client-full "$client" nopass
+		{
+		cat /etc/openvpn/server/client-common.txt
+		echo "<ca>"
+		cat /etc/openvpn/server/easy-rsa/pki/ca.crt
+		echo "</ca>"
+		echo "<cert>"
+		sed -ne '/BEGIN CERTIFICATE/,$ p' /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt
+		echo "</cert>"
+		echo "<key>"
+		cat /etc/openvpn/server/easy-rsa/pki/private/"$client".key
+		echo "</key>"
+		echo "<tls-crypt>"
+		sed -ne '/BEGIN OpenVPN Static key/,$ p' /etc/openvpn/server/tc.key
+		echo "</tls-crypt>"
+		} > ~/"$client".conf
+	fi
+}
+
+
+revoke_client(){
+	if ! [ -e /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt ]; then
+	 	echo -e "client does not exist."
+	 	exit 6
+	else
+		cd /etc/openvpn/server/easy-rsa/ || exit
+		./easyrsa --batch revoke "$client"
+		EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
+		rm -f /etc/openvpn/server/crl.pem
+		cp /etc/openvpn/server/easy-rsa/pki/crl.pem /etc/openvpn/server/crl.pem
+		chown nobody:nobody /etc/openvpn/server/crl.pem
+	fi
+}
+
+list_client(){
+	tail -n +2 /etc/openvpn/server/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2
+}
+
+get_openvpn_management() {
+	local MANAGEMENT_INTERFACE
+	MANAGEMENT_INTERFACE=$(grep management /etc/openvpn/server/server.conf)
+	local MANAGEMENT_IP
+	MANAGEMENT_IP=$(echo "$MANAGEMENT_INTERFACE" | cut -d " " -f2)
+	local MANAGEMENT_PORT
+	MANAGEMENT_PORT=$(echo "$MANAGEMENT_INTERFACE" | cut -d " " -f3)
+	local COUNT_START
+	COUNT_START=1
+	local COUNT_END
+	COUNT_END=$(ip -4 addr | grep inet | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | wc -l)
+	local ALL_IP
+	ALL_IP=$(ip -4 addr | grep inet | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')
+	local CHECK_LOCAL_IP
+	CHECK_LOCAL_IP=$(echo "$ALL_IP" | grep -E '127(\.[0-9]{1,3}){3}')
+	local CHECK_PRIVATE_IP
+	CHECK_PRIVATE_IP=$(echo "$ALL_IP" | grep -E '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168)')
+	local GET_PUBLIC_IP
+	GET_PUBLIC_IP=$(grep -m 1 -oE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' <<< "$(wget -T 10 -t 1 -4qO- "http://ip1.dynupdate.no-ip.com/" || curl -m 10 -4Ls "http://ip1.dynupdate.no-ip.com/")")
+	if [ "$MANAGEMENT_INTERFACE" ]; then
+	   	for i in $(seq "$COUNT_START" "$COUNT_END") ; do
+		i=$(ip -4 addr | grep inet | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | sed -n "$i"p)
+		echo -e "$i"
+			if [ "$i" == "$MANAGEMENT_IP" ]; then
+				case $i in
+				"$CHECK_LOCAL_IP")
+					echo -e "ip interface management is local and good."
+					;;
+				"$CHECK_PRIVATE_IP")
+					echo -e "ip interface management is private and not bad."
+					;;
+				"$GET_PUBLIC_IP")
+					echo -e "ip interface management is public and bad."
+					;;
+				*)
+					echo -e "im not think about it before."
+				esac
+			elif [ "$MANAGEMENT_IP" == "0.0.0.0" ]; then
+				echo -e "ip interface management is to 0.0.0.0 and very bad."
+			else
+				echo -e "management ip is not found on any interface of server"
+			fi
+		done
+		FINAL_MANAGEMENT_IP=$(grep management /etc/openvpn/server/server.conf | cut -d " " -f2)
+		FINAL_MANAGEMENT_PORT=$(grep management /etc/openvpn/server/server.conf | cut -d " " -f3)
+	else
+		echo -e "Openvpn interface management is not set."
+		exit 8
+	fi
+}
+
+Telnet(){
+	get_openvpn_management
+	local HOST
+	HOST="$FINAL_MANAGEMENT_IP $FINAL_MANAGEMENT_PORT"
+	echo "HOST: $HOST"
+	local STATUS_CMD
+	STATUS_CMD="$1"
+	(
+		echo open "$HOST"
+		sleep "$TELNET_SLEEP_TIME"
+		echo "$STATUS_CMD"
+		sleep $TELNET_SLEEP_TIME
+		echo "exit"
+		) | telnet #&> /dev/null
+
+}
+
+disconnect_client(){
+	Telnet "kill $client"
+}
+
+connected_clients(){
+	Telnet status | grep CLIENT_LIST
+}
+
+client_details(){
+	Telnet status | grep "CLIENT_LIST,$client,"
+}
+
+client_real_address(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f3
+}
+
+client_virtual_address(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f4
+}
+
+client_bytes_received(){
+	local CALCULATE_BYTES
+	CALCULATE_BYTES=$(Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f6)
+	if [ -z "$CALCULATE_BYTES" ]; then
+		echo -e "Client: $client Not Connected."
+	elif [ "$CALCULATE_BYTES" -lt 1000 ]; then
+	    echo -e "$CALCULATE_BYTES bytes"
+	elif [ "$CALCULATE_BYTES" -ge 1000 ] && [ "$CALCULATE_BYTES" -lt 1000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000))
+		echo -e "$CALCULATE_BYTES Kilobyte"
+	elif [ "$CALCULATE_BYTES" -ge 1000000 ] && [ "$CALCULATE_BYTES" -lt 1000000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000000))
+		echo -e "$CALCULATE_BYTES Megabyte"
+	elif [ "$CALCULATE_BYTES" -ge 1000000000 ] && [ "$CALCULATE_BYTES" -lt 1000000000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000000000))
+		echo -e "$CALCULATE_BYTES Gigabyte"
+	else
+		echo -e "Fuck You $client"
+	fi
+}
+
+client_bytes_send(){
+	local CALCULATE_BYTES
+	CALCULATE_BYTES=$(Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f7)
+	if [ -z "$CALCULATE_BYTES" ]; then
+		echo -e "Client: $client Not Connected."
+	elif [ "$CALCULATE_BYTES" -lt 1000 ]; then
+	    echo -e "$CALCULATE_BYTES bytes"
+	elif [ "$CALCULATE_BYTES" -ge 1000 ] && [ "$CALCULATE_BYTES" -lt 1000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000))
+		echo -e "$CALCULATE_BYTES Kilobyte"
+	elif [ "$CALCULATE_BYTES" -ge 1000000 ] && [ "$CALCULATE_BYTES" -lt 1000000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000000))
+		echo -e "$CALCULATE_BYTES Megabyte"
+	elif [ "$CALCULATE_BYTES" -ge 1000000000 ] && [ "$CALCULATE_BYTES" -lt 1000000000000 ]; then
+		CALCULATE_BYTES=$((CALCULATE_BYTES/1000000000))
+		echo -e "$CALCULATE_BYTES Gigabyte"
+	else
+		echo -e "Fuck You $client"
+	fi
+}
+
+client_connected_since(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f8
+}
+
+client_connected_since_t(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f9
+}
+
+client_connected_time(){
+	local CURRENT_UNIX_TIME
+	CURRENT_UNIX_TIME=$(date +%s)
+	local CONNECTED_SINCE
+	CONNECTED_SINCE=$(client_connected_since_t)
+	local CONNECTED_TIME_REMAIN
+	if [ -z "$CONNECTED_SINCE" ]; then
+	    if [ "$CURRENT_UNIX_TIME" -ge "$CONNECTED_SINCE" ]; then
+			local CONNECTED_TIME
+			CONNECTED_TIME=$((CURRENT_UNIX_TIME-CONNECTED_SINCE))
+			if [ "$CONNECTED_TIME" -lt 60 ] && [ "$CONNECTED_TIME"  ]; then
+				echo -e "$CONNECTED_TIME" "Seconds"
+			elif [ "$CONNECTED_TIME" -ge 60 ] && [ "$CONNECTED_TIME" -lt 3600 ]; then
+				CONNECTED_TIME_REMAIN=$((CONNECTED_TIME%60))
+				CONNECTED_TIME=$((CONNECTED_TIME/60))
+				echo -e "$CONNECTED_TIME" "Minutes" "and" "$CONNECTED_TIME_REMAIN" "Seconds"
+			elif [ "$CONNECTED_TIME" -ge 3600 ] && [ "$CONNECTED_TIME" -lt 86400 ]; then
+				CONNECTED_TIME_REMAIN=$((CONNECTED_TIME/60%60))
+				CONNECTED_TIME=$((CONNECTED_TIME/3600))
+				echo -e "$CONNECTED_TIME" "Hours" "and" "$CONNECTED_TIME_REMAIN" "Minutes"
+			elif [ "$CONNECTED_TIME" -ge 86400 ]; then
+				CONNECTED_TIME_REMAIN=$((CONNECTED_TIME/24/60%60))
+				CONNECTED_TIME=$((CONNECTED_TIME/86400))
+				echo -e "$CONNECTED_TIME" "Days" "and" "$CONNECTED_TIME_REMAIN" "Hours"
+			fi
+		fi
+	fi
+
+}
+
+realtime_netspeed(){
+	local R1 T1 R2 T2 TBPS RBPS INTERFACE txMETRIC rxMETRIC
+	INTERFACE=$1
+	while true
+	do
+			R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			sleep 1
+			R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			TBPS=$((T2-T1))
+			RBPS=$((R2-R1))
+
+			if [ -z "$TBPS" ]; then
+				echo -e "Can't get "transmit to" this server.."
+			elif [ "$TBPS" -lt 1024 ]; then
+				txMETRIC="B/S"
+			elif [ "$TBPS" -ge 1024 ] && [ "$TBPS" -lt 1048576 ]; then
+				TBPS=$((TBPS/1024))
+				txMETRIC="KB/S"
+			elif [ "$TBPS" -ge 1048576 ] && [ "$TBPS" -lt 1073741824 ]; then
+				TBPS=$((TBPS/1048576))
+				txMETRIC="MB/S"
+			elif [ "$TBPS" -ge 1073741824 ] && [ "$TBPS" -lt 1099511627776 ]; then
+				TBPS=$((TBPS/1073741824))
+				txMETRIC="GB/S"
+			else
+				echo -e "Fuck You $TBPS"
+			fi
+
+			if [ -z "$RBPS" ]; then
+				echo -e "Can't get "receive From" this server.."
+			elif [ "$RBPS" -lt 1000 ]; then
+				rxMETRIC="B/S"
+			elif [ "$RBPS" -ge 1000 ] && [ "$RBPS" -lt 1048576 ]; then
+				RBPS=$((RBPS/1000))
+				rxMETRIC="KB/S"
+			elif [ "$RBPS" -ge 1048576 ] && [ "$RBPS" -lt 1073741824 ]; then
+				RBPS=$((RBPS/1048576))
+				rxMETRIC="MB/S"
+			elif [ "$RBPS" -ge 1073741824 ] && [ "$RBPS" -lt 1099511627776 ]; then
+				RBPS=$((RBPS/1073741824))
+				rxMETRIC="GB/S"
+			else
+				echo -e "Fuck You $RBPS"
+			fi
+
+			echo -e "\n tx $INTERFACE: $TBPS $txMETRIC rx $INTERFACE: $RBPS $rxMETRIC"
+	done
+}
+
+netSpeed(){
+	local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS INTERFACE
+	INTERFACE=$1
+			R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			sleep 1
+			R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			TBPS=$((T2-T1))
+			RBPS=$((R2-R1))
+			TKBPS=$((TBPS/1024))
+			RKBPS=$((RBPS/1024))
+			echo -e "\ntx $INTERFACE: $TKBPS kB/s rx $INTERFACE: $RKBPS kB/s\n"
+
+}
+RTKBPS(){
+	local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS INTERFACE
+	INTERFACE=$1
+			R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			sleep 1
+			R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+			T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+			TBPS=$((T2-T1))
+			RBPS=$((R2-R1))
+			TKBPS=$((TBPS/1024))
+			RKBPS=$((RBPS/1024))
+			echo -e "$TKBPS $RBPS"
+}
+
+netpp(){
+	local R1 T1 R2 T2 TXPPS RXPPS INTERFACE
+	INTERFACE=$1
+while true
+do
+        R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_packets)
+        T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_packets)
+        sleep 1
+        R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_packets)
+        T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_packets)
+        TXPPS=$((T2-T1))
+        RXPPS=$((R2-R1))
+        echo "tx $1: $TXPPS pkts/s rx $1: $RXPPS pkts/s"
+done
+}
+
+client_id(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f11
+}
+
+client_peer_id(){
+	Telnet status | grep "CLIENT_LIST,$client," | cut -d "," -f12
+}
+
+case $1 in
+	-n|--new)
+		client_name
+		new_client
+		exit 0
+	;;
+	-r|--revoke)
+		client_name
+		revoke_client
+		exit 0
+	;;
+	-l|--list)
+		list_client
+		exit 0
+		;;
+	-c|-lc|--list-connected)
+		connected_clients
+		echo "$CONNECTED_CLIENTS"
+		;;
+	-d|--dc|--disconnect)
+		client_name
+#		revoke_client
+		disconnect_client
+		;;
+	-cd|--client-details)
+		client_name
+		client_details
+		;;
+	-rip|--client-real-address)
+		client_name
+		client_real_address
+		;;
+	-vip|--client-virtual-address)
+		client_name
+		client_virtual_address
+		;;
+	-br|--client-bytes-received)
+		client_name
+		client_bytes_received
+		;;
+	-bs|--client-bytes-send)
+		client_name
+		client_bytes_send
+		;;
+	-t|--client-connected-since)
+		client_name
+		client_connected_since
+		;;
+	-tt|--client-connected-since-t)
+		client_name
+		client_connected_since_t
+		;;
+	-ct|--client-connected-time)
+		client_name
+		client_connected_time
+		;;
+	-id|--client-id)
+		client_name
+		client_id
+		;;
+	-pid|--client-peer-id)
+		client_name
+		client_peer_id
+		;;
+	-i|--realtime-netspeed)
+		realtime_netspeed "$2"
+		;;
+	-ns|--netspeed)
+		netSpeed "$2"
+		;;
+	-rtx)
+		RTKBPS "$2"
+		;;
+	-npp|--realtime-netpp)
+		netpp "$2"
+		;;
+	-v|--version)
+		echo -e "Version: $VERSION"
+		;;
+	-h|--help)
+		usage
+		exit 0
+		;;
+	*)
+		echo -e "$1 is not an option. \n "
+		usage
+		exit 7
+esac
+
