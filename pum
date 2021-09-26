@@ -791,6 +791,11 @@ redis_collect(){
 #    sed 's/\\/ /g' | redis-cli -x set info2
 }
 
+return200(){
+    echo "hello" &> /dev/null
+    return ${1:-0}
+}
+
 case $1 in
 	-n|--new)
 		client_name
@@ -936,9 +941,19 @@ case $1 in
 		exit 0
 		;;
     --test)
-#        echo "test function:"
-        client_name
-        client_details
+        echo -e "EXIT CODE 100"
+        exit 100
+#        return 100
+        ;;
+    --test2)
+        echo -e "EXIT CODE 200"
+#        exit 100
+        return 200
+        ;;
+    --test3)
+        echo -e "EXIT CODE 300"
+#        exit 100
+        return200 "$1"
         ;;
 	*)
 		echo -e "$1 is not an option. \n "
