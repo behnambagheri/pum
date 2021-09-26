@@ -69,23 +69,23 @@ usage(){
 client_name(){
 	if [ -z "$unsanitized_client" ]; then
 		echo -e "client name not set."
-		exit 2
+		exit 200
 	elif [[ "$unsanitized_client" =~ ^[0-9]{1,3}$ ]]; then
 #		echo -e "client name sounds good."
 		client=$unsanitized_client
 	elif ! [[ "$unsanitized_client" =~ ^[0-9]{1,3}$ ]]; then
-		echo -e "client name not match regex."
-		exit 3
+#		echo -e "client name not match regex."
+		exit 201
 	else
 		echo -e "I dont think before about it!"
-		exit 4
+		exit 200
 	fi
 }
 new_client () {
 
 	if [ -e /etc/openvpn/server/easy-rsa/pki/issued/"$client".crt ]; then
 	 	echo -e "client exist."
-	 	exit 5
+	 	exit 202
 	else
 		# Generates the custom client.ovpn
 		cd /etc/openvpn/server/easy-rsa/ || exit
@@ -110,8 +110,13 @@ new_client () {
 }
 
 new_client_response(){
-    base64 ~/"$client".conf
-    rm -f ~/"$client".conf
+    if [ -f ~/"$client".conf ]; then
+        base64 ~/"$client".conf
+        rm -f ~/"$client".conf
+    else
+        echo -e "client file not exist."
+        exit 203
+    fi
 }
 
 
@@ -476,6 +481,47 @@ TKBPS(){
 	done
 }
 
+RTKBPS(){
+    while true; do
+        local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS INTERFACE
+        INTERFACE=$1
+                R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+                T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+                sleep 1
+                R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+                T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+                TBPS=$((T2-T1))
+                RBPS=$((R2-R1))
+                TKBPS=$((TBPS/1024))
+                RKBPS=$((RBPS/1024))
+                echo -ne "$RKBPS\t$TKBPS \033[0K\r"
+	done
+}
+
+
+RTKBPS_client(){
+    while true; do
+
+        local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS
+
+                R1=$(openvpn_management status | grep "CLIENT_LIST,$client," | cut -d "," -f6)
+                T1=$(openvpn_management status | grep "CLIENT_LIST,$client," | cut -d "," -f7)
+                sleep 1
+                R2=$(openvpn_management status | grep "CLIENT_LIST,$client," | cut -d "," -f6)
+                T2=$(openvpn_management status | grep "CLIENT_LIST,$client," | cut -d "," -f7)
+                TBPS=$((T2-T1))
+                RBPS=$((R2-R1))
+                TKBPS=$((TBPS/1024))
+                RKBPS=$((RBPS/1024))
+                echo -ne "$RKBPS\t$TKBPS \033[0K\r"
+
+                if [ -z "$R1" ] || [ -z "$T1" ]; then
+                    echo -e "Client: $client Not connected."
+                    exit 10
+                fi
+	done
+}
+
 RTKBPS-NOW(){
     local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS INTERFACE MODE
     MODE=$2
@@ -721,7 +767,7 @@ run-command(){
 }
 
 show_result(){
-    local cn cs
+    local cn cs ri br bs
 #    echo -e "$get_result"
 #    str="ERROR: common name"
     if [[ "$get_result" == *"ERROR: common name"* ]] ; then
@@ -730,6 +776,17 @@ show_result(){
     elif [[ "$get_result" == *"client(s) killed"* ]]; then
         echo -e "Client: $client Disconnected."
         exit 0
+    elif [[ "$get_result" == *"CLIENT_LIST,$client"* ]]; then
+        cn=$(echo "$get_result" | cut -d"," -f2)
+        ri=$(echo "$get_result" | cut -d"," -f3)
+        br=$(echo "$get_result" | cut -d"," -f6)
+        br=$((br/1000))
+        bs=$(echo "$get_result" | cut -d"," -f7)
+        bs=$((bs/1000))
+#        echo -e "Client Name\t Client Connected Since\n"
+        echo -e "$cn,$ri,$br,$bs"
+#        paste <(printf %s "$cn") <(printf %s "$cs")
+        exit
     elif [[ "$get_result" == *"CLIENT_LIST,"* ]]; then
         cn=$(echo "$get_result" | cut -d"," -f2 | tail -n +2)
         cs=$(echo "$get_result" | cut -d"," -f8 | tail -n +2)
@@ -791,9 +848,28 @@ redis_collect(){
 #    sed 's/\\/ /g' | redis-cli -x set info2
 }
 
-return200(){
-    echo "hello" &> /dev/null
-    return ${1:-0}
+test_fun(){
+    while true;do
+        for i in {1..10}
+        do
+            local R1 T1 R2 T2 TBPS RBPS TKBPS RKBPS INTERFACE
+            INTERFACE="$1"
+                R1=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+                T1=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+                sleep 1
+                R2=$(cat /sys/class/net/"$INTERFACE"/statistics/rx_bytes)
+                T2=$(cat /sys/class/net/"$INTERFACE"/statistics/tx_bytes)
+                TBPS=$((T2-T1))
+                RBPS=$((R2-R1))
+                TKBPS=$((TBPS/1024))
+                RKBPS=$((RBPS/1024))
+                echo -ne "$RKBPS,$TKBPS \033[0K\r"
+            if [ "$i" -eq 10 ]; then
+                exit 222
+            fi
+
+        done
+done
 }
 
 case $1 in
@@ -882,6 +958,13 @@ case $1 in
 	-tx)
 		TKBPS "$2"
 		;;
+	-rtx)
+		RTKBPS "$2"
+		;;
+	-rtx-c)
+	    client_name
+		RTKBPS_client
+		;;
 	-npp|--realtime-netpp)
 		netpp "$2"
 		;;
@@ -941,19 +1024,9 @@ case $1 in
 		exit 0
 		;;
     --test)
-        echo -e "EXIT CODE 100"
-        exit 100
+        test_fun "$2"
+        exit 123
 #        return 100
-        ;;
-    --test2)
-        echo -e "EXIT CODE 200"
-#        exit 100
-        return 200
-        ;;
-    --test3)
-        echo -e "EXIT CODE 300"
-#        exit 100
-        return200 "$1"
         ;;
 	*)
 		echo -e "$1 is not an option. \n "
