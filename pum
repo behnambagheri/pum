@@ -494,7 +494,8 @@ RTKBPS(){
                 RBPS=$((R2-R1))
                 TKBPS=$((TBPS/1024))
                 RKBPS=$((RBPS/1024))
-                echo -ne "$RKBPS\t$TKBPS \033[0K\r"
+#                echo -ne "$RKBPS\t$TKBPS \033[0K\r"
+                echo -ne "$RKBPS,$TKBPS \033[0K\r"
 	done
 }
 
